@@ -1,3 +1,4 @@
+// FlaskChatService.java
 package org.example.capstone.chat.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,16 +34,13 @@ public class FlaskChatService {
             HttpPost uploadFile = new HttpPost(flaskApiUrl);
 
             MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+            // Flask API는 "message" 파라미터 사용
             builder.addTextBody("message", chatRequest.getMessage(), ContentType.TEXT_PLAIN);
             builder.addTextBody("username", chatRequest.getUsername(), ContentType.TEXT_PLAIN);
 
-            if (chatRequest.getImage() != null && !chatRequest.getImage().isEmpty()) {
-                builder.addBinaryBody(
-                        "image",
-                        chatRequest.getImage().getInputStream(),
-                        ContentType.MULTIPART_FORM_DATA,
-                        chatRequest.getImage().getOriginalFilename()
-                );
+            // 세션 ID가 있다면 추가
+            if (chatRequest.getSessionId() != null) {
+                builder.addTextBody("sessionId", chatRequest.getSessionId(), ContentType.TEXT_PLAIN);
             }
 
             HttpEntity multipart = builder.build();
@@ -51,8 +49,12 @@ public class FlaskChatService {
             try (CloseableHttpResponse response = httpClient.execute(uploadFile)) {
                 HttpEntity responseEntity = response.getEntity();
                 String responseString = EntityUtils.toString(responseEntity);
-                log.info("Flask API Response: {}", responseString);
-                return objectMapper.readValue(responseString, ChatResponse.class);
+                log.info("Flask API Chat Response: {}", responseString);
+
+                // 채팅 응답만 파싱
+                ChatResponse chatResponse = objectMapper.readValue(responseString, ChatResponse.class);
+
+                return chatResponse;
             }
         }
     }
