@@ -9,4 +9,5 @@ public class RecipeGenerateRequest {
     private String instructions;
     private String username;
     private String sessionId;
+    private Long userId;        // 사용자 ID 필드 추가
 }

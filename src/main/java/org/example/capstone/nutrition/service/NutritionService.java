@@ -52,10 +52,10 @@ public class NutritionService {
                 .orElseThrow(() -> new CustomException(RECIPE_NOT_FOUND));
 
         //레시피 유저 비교
-        Long userId = userDetails.getUserId();
-        if(!recipe.getUser().getId().equals(userId)){
-            throw new CustomException(INVALID_USER);
-        }
+        //Long userId = userDetails.getUserId();
+        //if(!recipe.getUser().getId().equals(userId)){
+        //    throw new CustomException(INVALID_USER);
+        //}
 
         // Flask API에서 영양 성분 정보 가져오기
         NutritionDTO nutritionDto = getNutritionFromFlask(recipeId).block();

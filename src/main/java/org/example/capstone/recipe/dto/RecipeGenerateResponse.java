@@ -17,4 +17,5 @@ public class RecipeGenerateResponse {
     private List<IngredientDTO> ingredients;
     private List<InstructionDTO> instructions;
     private String imageUrl;
+    private Long userId;        // 소유자 ID 필드 추가
 }

@@ -73,18 +73,32 @@ public class RecipeController {
         try {
             log.info("레시피 생성 요청 처리 - 사용자: {}", userDetails.getUsername());
 
+            // 사용자 ID 명시적으로 확인 및 로깅
+            String username = userDetails.getUsername();
+            Long userId = userDetails.getUserId();
+            log.info("레시피 생성 요청 처리 - 사용자: {}, ID: {}", username, userId);
+
             // 세션 ID 생성
             String sessionId = UUID.randomUUID().toString();
 
-            // 요청 객체 생성
+            /// 요청 객체 생성 - 현재 로그인한 사용자 정보 추가
             RecipeGenerateRequest request = new RecipeGenerateRequest();
             request.setImage(image);
             request.setInstructions(instructions);
             request.setUsername(userDetails.getUsername());
             request.setSessionId(sessionId);
 
+            // 현재 사용자의 ID도 명시적으로 저장
+            request.setUserId(userId);  // 이 필드가 RecipeGenerateRequest에 추가되어야 함
+
+            log.info("요청 객체 설정 완료 - 사용자: {}, ID: {}", request.getUsername(), request.getUserId());
+
             // Flask 서버에 요청 전송
             RecipeGenerateResponse flaskResponse = recipeService.generateRecipeFromImage(request);
+
+            // 응답 검증 로깅
+            log.info("생성된 레시피 정보 - ID: {}, 이름: {}, 소유자 ID: {}",
+                    flaskResponse.getId(), flaskResponse.getName(), flaskResponse.getUserId());
 
             // 레시피 저장은 서비스 내부에서 처리되므로 ID 값을 가져옴
             // 통합된 서비스가 적절히 구현되었다고 가정

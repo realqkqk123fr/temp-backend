@@ -105,11 +105,13 @@ public class FlaskRecipeService {
     /**
      * 이미지 분석 및 레시피 생성 요청을 Flask 서버로 전송
      */
+    @Transactional
     public RecipeGenerateResponse generateRecipeFromImage(RecipeGenerateRequest request) throws IOException {
         try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
-            // 전체 URL 구성 (수정 부분)
+            // 전체 URL 구성
             String fullUrl = flaskBaseUrl + recipeGenerateEndpoint;
-            log.info("Requesting to Flask URL: {}", fullUrl); // 로깅 추가
+            log.info("Requesting to Flask URL: {}", fullUrl);
+            log.info("사용자 정보: 사용자명={}, 요청자 ID={}", request.getUsername(), request.getUserId());
 
             // 이 부분에서 fullUrl을 사용하도록 수정
             HttpPost uploadFile = new HttpPost(fullUrl);
@@ -147,14 +149,29 @@ public class FlaskRecipeService {
 
                 RecipeGenerateResponse flaskResponse = objectMapper.readValue(responseString, RecipeGenerateResponse.class);
 
-                // 사용자 이름으로 사용자 조회
-                User user = userRepository.findByUsername(request.getUsername());
-                if (user == null) {
+                // 현재 요청 사용자의 정보로 레시피 저장
+                User user = null;
+                if (request.getUserId() != null) {
+                    // 사용자 ID로 사용자 조회
+                    user = userRepository.findById(request.getUserId())
+                            .orElseThrow(() -> new CustomException(USER_NOT_FOUND));
+                    log.info("레시피 소유자 설정: {}, ID: {}", user.getUsername(), user.getId());
+                } else if (request.getUsername() != null) {
+                    // 사용자명으로 사용자 조회 (대체 방법)
+                    user = userRepository.findByUsername(request.getUsername());
+                    if (user == null) {
+                        throw new CustomException(USER_NOT_FOUND);
+                    }
+                    log.info("레시피 소유자 설정(사용자명): {}, ID: {}", user.getUsername(), user.getId());
+                } else {
                     throw new CustomException(USER_NOT_FOUND);
                 }
 
                 Recipe savedRecipe = saveRecipeFromResponse(flaskResponse, user);
                 flaskResponse.setId(savedRecipe.getId());
+
+                // 응답에 사용자 ID 설정 (클라이언트에서 확인용)
+                flaskResponse.setUserId(user.getId());
 
                 return flaskResponse;
             }
@@ -165,14 +182,17 @@ public class FlaskRecipeService {
     }
 
     /**
-     * RecipeGenerateResponse로부터 레시피 저장
+     * RecipeGenerateResponse로부터 레시피 저장 (사용자 객체 직접 전달)
      */
     private Recipe saveRecipeFromResponse(RecipeGenerateResponse recipeResponse, User user) {
+        // 레시피 소유자 정보 명시적 로깅
+        log.info("레시피 저장 시작 - 소유자: {}, ID: {}", user.getUsername(), user.getId());
+
         // 레시피 엔티티 생성
         Recipe recipe = Recipe.builder()
                 .name(recipeResponse.getName())
                 .description(recipeResponse.getDescription())
-                .user(user)
+                .user(user) // 명시적으로 사용자 설정
                 .build();
 
         // 재료 엔티티 생성
@@ -203,7 +223,11 @@ public class FlaskRecipeService {
         recipe.setInstructions(instructions);
 
         // 레시피 저장
-        return recipeRepository.save(recipe);
+        Recipe savedRecipe = recipeRepository.save(recipe);
+        log.info("레시피 저장 완료 - ID: {}, 소유자: {}, 소유자 ID: {}",
+                savedRecipe.getId(), savedRecipe.getUser().getUsername(), savedRecipe.getUser().getId());
+
+        return savedRecipe;
     }
 
     /**
@@ -235,6 +259,7 @@ public class FlaskRecipeService {
                                 // 원본 레시피 사용자를 사용
                                 Recipe savedRecipe = saveRecipeFromResponse(response, originalRecipe.getUser());
                                 response.setId(savedRecipe.getId());
+                                response.setUserId(savedRecipe.getUser().getId());  // 응답에 사용자 ID 설정
                             }
                         } catch (Exception e) {
                             log.error("대체 레시피 저장 중 오류: {}", e.getMessage());
@@ -251,8 +276,11 @@ public class FlaskRecipeService {
         Recipe recipe = recipeRepository.findById(recipeId)
                 .orElseThrow(() -> new CustomException(RECIPE_NOT_FOUND));
 
-        // 사용자 권한 검증 (필요시)
+        // 사용자 권한 검증 부분은 일단 유지
+        // 필요시 이 부분을 수정하여 모든 인증된 사용자가 레시피를 볼 수 있도록 할 수 있음
         if (userDetails != null && !recipe.getUser().getId().equals(userDetails.getUserId())) {
+            log.warn("레시피 접근 권한 오류 - 레시피 ID: {}, 소유자 ID: {}, 요청자 ID: {}",
+                    recipeId, recipe.getUser().getId(), userDetails.getUserId());
             throw new CustomException(INVALID_USER);
         }
 
