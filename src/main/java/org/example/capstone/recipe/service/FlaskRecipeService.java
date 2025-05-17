@@ -45,6 +45,9 @@ import static org.example.capstone.global.exception.ErrorCode.*;
 public class FlaskRecipeService {
 
     // Flask API 엔드포인트 관련 설정
+    @Value("${flask.api.base-url}")
+    private String flaskBaseUrl;
+
     @Value("${flask.api.endpoints.chat}")
     private String chatEndpoint;
 
@@ -104,7 +107,12 @@ public class FlaskRecipeService {
      */
     public RecipeGenerateResponse generateRecipeFromImage(RecipeGenerateRequest request) throws IOException {
         try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
-            HttpPost uploadFile = new HttpPost(recipeGenerateEndpoint);
+            // 전체 URL 구성 (수정 부분)
+            String fullUrl = flaskBaseUrl + recipeGenerateEndpoint;
+            log.info("Requesting to Flask URL: {}", fullUrl); // 로깅 추가
+
+            // 이 부분에서 fullUrl을 사용하도록 수정
+            HttpPost uploadFile = new HttpPost(fullUrl);
 
             MultipartEntityBuilder builder = MultipartEntityBuilder.create();
             builder.addTextBody("instructions", request.getInstructions(), ContentType.TEXT_PLAIN);
@@ -115,11 +123,17 @@ public class FlaskRecipeService {
             }
 
             if (request.getImage() != null && !request.getImage().isEmpty()) {
+                // 파일 이름에서 비ASCII 문자 제거
+                String originalFilename = request.getImage().getOriginalFilename();
+                String safeFilename = originalFilename != null ?
+                        originalFilename.replaceAll("[^a-zA-Z0-9.\\-]", "_") :
+                        "image.jpg";
+
                 builder.addBinaryBody(
                         "image",
                         request.getImage().getInputStream(),
                         ContentType.MULTIPART_FORM_DATA,
-                        request.getImage().getOriginalFilename()
+                        safeFilename // 안전한 파일 이름 사용
                 );
             }
 

@@ -19,6 +19,7 @@ public class Instruction {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(columnDefinition = "TEXT")
     private String instruction;
     private int cookingTime;
 
