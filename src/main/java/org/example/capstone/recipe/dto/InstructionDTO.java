@@ -14,5 +14,5 @@ public class InstructionDTO {
 
     private String instruction;
     private int cookingTime;
-
+    private int stepNumber; // 단계 번호 추가
 }
