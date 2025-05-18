@@ -248,7 +248,26 @@ public class FlaskRecipeService {
                 .bodyToMono(RecipeGenerateResponse.class)
                 .map(response -> {
                     if (response != null) {
-                        log.debug("대체 재료 요청 성공: {}", response.getName());
+                        log.debug("대체 재료 요청 응답: {}", response.getName());
+
+                        // 대체 불가능한 경우 확인
+                        boolean isSubstituteFailure =
+                                (response.getDescription() != null && (
+                                        response.getDescription().contains("적절하지 않아") ||
+                                                response.getDescription().contains("생성할 수 없"))) ||
+                                        (response.getIngredients() == null || response.getIngredients().isEmpty()) ||
+                                        (response.getInstructions() == null || response.getInstructions().isEmpty());
+
+                        if (isSubstituteFailure) {
+                            log.info("대체 재료 사용 불가: {} -> {}, 사유: {}",
+                                    request.getOriginalIngredient(),
+                                    request.getSubstituteIngredient(),
+                                    response.getDescription());
+
+                            // 대체 불가 플래그 추가
+                            response.setSubstituteFailure(true);
+                            return response;
+                        }
 
                         try {
                             // 레시피 ID로 레시피 조회
@@ -259,11 +278,10 @@ public class FlaskRecipeService {
                                 // 원본 레시피 사용자를 사용
                                 Recipe savedRecipe = saveRecipeFromResponse(response, originalRecipe.getUser());
                                 response.setId(savedRecipe.getId());
-                                response.setUserId(savedRecipe.getUser().getId());  // 응답에 사용자 ID 설정
+                                response.setUserId(savedRecipe.getUser().getId());
                             }
                         } catch (Exception e) {
                             log.error("대체 레시피 저장 중 오류: {}", e.getMessage());
-                            // 오류 발생 시에도 응답은 반환
                         }
                     }
                     return response;

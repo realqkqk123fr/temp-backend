@@ -62,6 +62,17 @@ public class LoginFilter extends UsernamePasswordAuthenticationFilter {
         // UserDetails
         CustomUserDetails customUserDetails = (CustomUserDetails) authentication.getPrincipal();
 
+        // 사용자 ID 확인 및 로깅
+        Long userId = customUserDetails.getUserId();
+        log.info("인증 성공 - 사용자: {}, 이메일: {}, ID: {}",
+                customUserDetails.getUsername(),
+                customUserDetails.getUserEmail(),
+                userId);
+
+        if (userId == null) {
+            log.warn("인증된 사용자의 ID가 null입니다. CustomUserDetails: {}", customUserDetails);
+        }
+
         // AccessToken 발급
         String accessToken = jwtUtil.createAccessToken(customUserDetails);
 

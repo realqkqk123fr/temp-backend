@@ -58,7 +58,7 @@ public class SecurityConfig {
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 //필터 위치
                 .addFilterBefore(
-                        new JwtFilter(jwtUtil),
+                        new JwtFilter(jwtUtil, userRepository),
                         LoginFilter.class
                 )
                 .addFilterAt(

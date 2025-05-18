@@ -117,8 +117,10 @@ public class RecipeController {
     /**
      * 대체 재료 요청 API
      */
+    // src/main/java/org/example/capstone/recipe/controller/RecipeController.java
+
     @PostMapping("/api/recipe/substitute")
-    public ResponseEntity<RecipeGenerateResponse> substituteIngredient(
+    public ResponseEntity<?> substituteIngredient(
             @RequestBody SubstituteIngredientRequest request,
             @AuthenticationPrincipal CustomUserDetails userDetails) {
 
@@ -130,6 +132,27 @@ public class RecipeController {
             RecipeGenerateResponse response = recipeService.substituteIngredient(request).block();
 
             if (response != null) {
+                // 대체 불가능한 경우 검사 - 설명에 "적절하지 않" 또는 "생성할 수 없" 문구가 포함된 경우
+                boolean isSubstituteFailure =
+                        (response.getDescription() != null && (
+                                response.getDescription().contains("적절하지 않") ||
+                                        response.getDescription().contains("생성할 수 없"))) ||
+                                (response.getIngredients() == null || response.getIngredients().isEmpty()) ||
+                                (response.getInstructions() == null || response.getInstructions().isEmpty());
+
+                if (isSubstituteFailure) {
+                    // 대체 실패 시 명확한 오류 응답 반환
+                    return ResponseEntity.badRequest().body(
+                            Map.of(
+                                    "success", false,
+                                    "message", String.format("%s를 %s로 대체할 수 없습니다: %s",
+                                            request.getOriginalIngredient(),
+                                            request.getSubstituteIngredient(),
+                                            response.getDescription())
+                            )
+                    );
+                }
+
                 // 대체 레시피 생성 알림 메시지를 WebSocket으로 전송
                 sendSubstituteRecipeNotification(
                         userDetails.getUsername(),
@@ -137,12 +160,23 @@ public class RecipeController {
                         request.getSubstituteIngredient(),
                         response.getName()
                 );
-            }
 
-            return ResponseEntity.ok(response);
+                // 정상 응답
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(Map.of(
+                                "success", false,
+                                "message", "대체 재료 처리 중 오류가 발생했습니다."
+                        ));
+            }
         } catch (Exception e) {
             log.error("대체 재료 요청 중 오류 발생: {}", e.getMessage(), e);
-            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "success", false,
+                            "message", "대체 재료 요청 처리 중 오류가 발생했습니다: " + e.getMessage()
+                    ));
         }
     }
 
@@ -188,10 +222,20 @@ public class RecipeController {
      * 대체 레시피 생성 알림을 WebSocket으로 전송
      */
     private void sendSubstituteRecipeNotification(String username, String original, String substitute, String recipeName) {
+        // 대체 가능 여부에 따라 다른 메시지 전송
+        boolean isSuccessful = recipeName != null && !recipeName.isBlank() &&
+                !recipeName.contains("적절하지 않") &&
+                !recipeName.contains("생성할 수 없");
+
+        String messageText = isSuccessful
+                ? original + "를 " + substitute + "로 대체한 레시피가 생성되었습니다: " + recipeName
+                : original + "를 " + substitute + "로 대체할 수 없습니다.";
+
         Map<String, Object> notification = new HashMap<>();
         notification.put("type", "recipe_substituted");
-        notification.put("message", original + "를 " + substitute + "로 대체한 레시피가 생성되었습니다: " + recipeName);
+        notification.put("message", messageText);
         notification.put("username", "시스템");
+        notification.put("success", isSuccessful);
 
         messagingTemplate.convertAndSendToUser(
                 username,

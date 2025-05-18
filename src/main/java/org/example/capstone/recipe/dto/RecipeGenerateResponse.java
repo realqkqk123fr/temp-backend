@@ -18,4 +18,5 @@ public class RecipeGenerateResponse {
     private List<InstructionDTO> instructions;
     private String imageUrl;
     private Long userId;        // 소유자 ID 필드 추가
+    private boolean substituteFailure; // 추가: 대체 실패 여부
 }

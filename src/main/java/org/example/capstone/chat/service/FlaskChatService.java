@@ -19,22 +19,38 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 
+// org.example.capstone.chat.service.FlaskChatService.java
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class FlaskChatService {
 
     @Value("${flask.api.endpoints.chat}")
-    private String flaskApiUrl;
+    private String flaskChatEndpoint;
+
+    @Value("${flask.api.base-url}")
+    private String flaskBaseUrl;
 
     private final ObjectMapper objectMapper;
 
     public ChatResponse sendRequestToFlask(ChatRequest chatRequest) throws IOException {
+        // URL 로깅 추가
+        String fullUrl = flaskBaseUrl + flaskChatEndpoint;
+        log.info("Flask API 요청 URL: {}", fullUrl);
+
+        // URL 유효성 확인
+        if (fullUrl == null || fullUrl.trim().isEmpty() || !fullUrl.startsWith("http")) {
+            log.error("잘못된 Flask API URL: {}", fullUrl);
+            throw new IllegalArgumentException("유효하지 않은 Flask API URL: " + fullUrl);
+        }
+
         try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
-            HttpPost uploadFile = new HttpPost(flaskApiUrl);
+            // 여기서 수정: 완전한 URL 사용
+            HttpPost httpPost = new HttpPost(fullUrl);
 
             MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-            // Flask API는 "message" 파라미터 사용
+            // Flask API 파라미터 추가
             builder.addTextBody("message", chatRequest.getMessage(), ContentType.TEXT_PLAIN);
             builder.addTextBody("username", chatRequest.getUsername(), ContentType.TEXT_PLAIN);
 
@@ -44,16 +60,15 @@ public class FlaskChatService {
             }
 
             HttpEntity multipart = builder.build();
-            uploadFile.setEntity(multipart);
+            httpPost.setEntity(multipart);
 
-            try (CloseableHttpResponse response = httpClient.execute(uploadFile)) {
+            try (CloseableHttpResponse response = httpClient.execute(httpPost)) {
                 HttpEntity responseEntity = response.getEntity();
                 String responseString = EntityUtils.toString(responseEntity);
                 log.info("Flask API Chat Response: {}", responseString);
 
-                // 채팅 응답만 파싱
+                // 응답 파싱
                 ChatResponse chatResponse = objectMapper.readValue(responseString, ChatResponse.class);
-
                 return chatResponse;
             }
         }
