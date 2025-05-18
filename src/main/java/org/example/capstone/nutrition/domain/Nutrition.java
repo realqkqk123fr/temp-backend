@@ -1,6 +1,5 @@
 package org.example.capstone.nutrition.domain;
 
-
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -13,6 +12,7 @@ import org.example.capstone.recipe.domain.Recipe;
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
+@Table(uniqueConstraints = @UniqueConstraint(columnNames = "recipe_id"))
 public class Nutrition {
 
     @Id
@@ -20,7 +20,7 @@ public class Nutrition {
     private Long id;
 
     @OneToOne
-    @JoinColumn(name = "recipe_id")
+    @JoinColumn(name = "recipe_id", unique = true)
     private Recipe recipe;
 
     private Double calories;        //칼로리
