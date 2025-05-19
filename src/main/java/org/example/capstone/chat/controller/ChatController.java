@@ -14,6 +14,7 @@ import org.springframework.stereotype.Controller;
 
 import java.io.IOException;
 import java.security.Principal;
+import java.util.UUID;
 
 @Controller
 @RequiredArgsConstructor
@@ -48,9 +49,22 @@ public class ChatController {
             // 이미지 처리 (이제 레시피 생성 기능으로 분리됨)
             chatRequest.setImage(null);
 
+            // 세션 ID 확인 및 처리
+            if (chatRequest.getSessionId() == null || chatRequest.getSessionId().isEmpty()) {
+                // 세션 ID가 없으면 생성
+                chatRequest.setSessionId(UUID.randomUUID().toString());
+                log.debug("새 세션 ID 생성: {}", chatRequest.getSessionId());
+            } else {
+                log.debug("기존 세션 ID 사용: {}", chatRequest.getSessionId());
+            }
+
             // Flask 서버에 요청 전송 (순수 채팅 메시지만)
             ChatResponse response = flaskChatService.sendRequestToFlask(chatRequest);
             log.debug("Flask 채팅 응답 수신: {}", response.getMessage());
+
+            // 응답에 세션 ID 설정
+            response.setSessionId(chatRequest.getSessionId());
+            log.debug("응답에 세션 ID 설정: {}", response.getSessionId());
 
             // 응답을 사용자에게 전송
             messagingTemplate.convertAndSendToUser(
