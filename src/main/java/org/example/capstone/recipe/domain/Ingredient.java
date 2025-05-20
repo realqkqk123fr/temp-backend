@@ -20,6 +20,9 @@ public class Ingredient {
 
     private String name;
 
+    // 추가: 재료의 양을 저장하는 필드
+    private String amount;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id")
     private Recipe recipe;

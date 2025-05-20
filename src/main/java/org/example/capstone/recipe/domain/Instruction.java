@@ -21,7 +21,10 @@ public class Instruction {
 
     @Column(columnDefinition = "TEXT")
     private String instruction;
-    private int cookingTime;
+    private int cookingTime;    // 분 단위
+
+    // 초 단위 조리 시간 필드 추가
+    private Integer cookingTimeSeconds; //
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "recipe_id")

@@ -13,4 +13,7 @@ import lombok.NoArgsConstructor;
 public class IngredientDTO {
 
     private String name;
+
+    // 추가: 재료의 양 정보
+    private String amount;
 }

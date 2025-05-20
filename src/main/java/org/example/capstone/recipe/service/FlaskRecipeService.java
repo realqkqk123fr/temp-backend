@@ -201,6 +201,7 @@ public class FlaskRecipeService {
             for (IngredientDTO dto : recipeResponse.getIngredients()) {
                 Ingredient ingredient = Ingredient.builder()
                         .name(dto.getName())
+                        .amount(dto.getAmount()) // amount 필드 저장
                         .recipe(recipe)
                         .build();
                 ingredients.add(ingredient);
@@ -208,13 +209,21 @@ public class FlaskRecipeService {
         }
         recipe.setIngredients(ingredients);
 
-        // 조리 단계 엔티티 생성
+        // 조리 단계 엔티티 생성 - cookingTimeSeconds 필드 처리 추가
         List<Instruction> instructions = new ArrayList<>();
         if (recipeResponse.getInstructions() != null) {
             for (InstructionDTO dto : recipeResponse.getInstructions()) {
+                // 초 단위 시간 처리
+                Integer cookingTimeSeconds = dto.getCookingTimeSeconds();
+                if (cookingTimeSeconds == null) {
+                    // 초 단위 값이 없는 경우 분 단위에서 변환
+                    cookingTimeSeconds = dto.getCookingTime() * 60;
+                }
+
                 Instruction instruction = Instruction.builder()
                         .instruction(dto.getInstruction())
                         .cookingTime(dto.getCookingTime())
+                        .cookingTimeSeconds(cookingTimeSeconds) // 초 단위 저장
                         .recipe(recipe)
                         .build();
                 instructions.add(instruction);
@@ -308,15 +317,29 @@ public class FlaskRecipeService {
     // 어시스턴스 응답 생성
     public RecipeAssistanceResponse createAssistanceResponse(Recipe recipe) {
         List<InstructionDTO> instructions = new ArrayList<>();
+        int totalCookingTime = 0;
+        int totalCookingTimeSeconds = 0;
 
         // 레시피의 지시사항을 단계별로 변환
         if (recipe.getInstructions() != null) {
             for (int i = 0; i < recipe.getInstructions().size(); i++) {
                 Instruction instruction = recipe.getInstructions().get(i);
 
+                // 초 단위 조리 시간 처리
+                Integer cookingTimeSeconds = instruction.getCookingTimeSeconds();
+                if (cookingTimeSeconds == null) {
+                    // 초 단위 값이 없는 경우 분 단위에서 변환
+                    cookingTimeSeconds = instruction.getCookingTime() * 60;
+                }
+
+                // 총 조리 시간 누적
+                totalCookingTime += instruction.getCookingTime();
+                totalCookingTimeSeconds += cookingTimeSeconds;
+
                 instructions.add(InstructionDTO.builder()
                         .instruction(instruction.getInstruction())
                         .cookingTime(instruction.getCookingTime())
+                        .cookingTimeSeconds(cookingTimeSeconds)
                         .stepNumber(i + 1)  // 단계 번호 추가
                         .build());
             }
@@ -326,7 +349,7 @@ public class FlaskRecipeService {
         List<IngredientDTO> ingredients = recipe.getIngredients().stream()
                 .map(ingredient -> IngredientDTO.builder()
                         .name(ingredient.getName())
-                        // 필요한 추가 필드 설정
+                        .amount(ingredient.getAmount()) // 양 추가
                         .build())
                 .collect(Collectors.toList());
 
@@ -337,7 +360,35 @@ public class FlaskRecipeService {
                 .description(recipe.getDescription())
                 .instructions(instructions)
                 .ingredients(ingredients)
-                // 필요한 추가 정보 설정
+                .totalCookingTime(totalCookingTime)
+                .totalCookingTimeSeconds(totalCookingTimeSeconds)
+                .difficulty(estimateDifficulty(recipe)) // 난이도 추정
+                .servings(estimateServings(recipe))     // 인분 수 추정
                 .build();
+    }
+
+    // 레시피 난이도 추정
+    private String estimateDifficulty(Recipe recipe) {
+        if (recipe.getInstructions() == null) {
+            return "보통";
+        }
+
+        int instructionCount = recipe.getInstructions().size();
+        int ingredientCount = recipe.getIngredients() != null ? recipe.getIngredients().size() : 0;
+
+        // 간단한 난이도 추정 로직
+        if (instructionCount <= 3 && ingredientCount <= 5) {
+            return "쉬움";
+        } else if (instructionCount >= 7 || ingredientCount >= 10) {
+            return "어려움";
+        } else {
+            return "보통";
+        }
+    }
+
+    // 레시피 인분 수 추정
+    private String estimateServings(Recipe recipe) {
+        // 기본값으로 2인분 설정
+        return "2인분";
     }
 }

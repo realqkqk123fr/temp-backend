@@ -17,5 +17,8 @@ public class RecipeAssistanceResponse {
     private String description;
     private List<InstructionDTO> instructions;
     private List<IngredientDTO> ingredients;
-    // 필요한 추가 필드 (총 조리시간, 난이도 등)
+    private int totalCookingTime;   // 총 조리 시간 (분)
+    private int totalCookingTimeSeconds; // 총 조리 시간 (초)
+    private String difficulty;      // 난이도
+    private String servings;        // 인분 수
 }
