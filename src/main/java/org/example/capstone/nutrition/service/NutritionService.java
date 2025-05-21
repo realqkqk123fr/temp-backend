@@ -107,16 +107,23 @@ public class NutritionService {
             requestBody.put("ingredients", ingredientsStr);
 
             // API 호출
-            return webClient.post()
+            // API 호출 결과 로깅 추가
+            NutritionDTO result = webClient.post()
                     .uri(nutritionEndpoint)
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(NutritionDTO.class)
-                    .doOnSuccess(n -> log.info("영양 정보 응답 성공"))
+                    .doOnSuccess(n -> {
+                        log.info("영양 정보 응답 성공");
+                        log.info("수신된 영양 정보: 칼로리={}, 탄수화물={}, 단백질={}, 지방={}, 당={}, 나트륨={}, 포화지방={}, 트랜스지방={}, 콜레스테롤={}",
+                                n.getCalories(), n.getCarbohydrate(), n.getProtein(), n.getFat(),
+                                n.getSugar(), n.getSodium(), n.getSaturatedFat(), n.getTransFat(), n.getCholesterol());
+                    })
                     .doOnError(e -> log.error("영양 정보 요청 실패: {}", e.getMessage()))
                     .onErrorReturn(createDefaultNutrition())
                     .block();
 
+            return result;
         } catch (Exception e) {
             log.error("Flask API 호출 오류: {}", e.getMessage());
             return createDefaultNutrition();

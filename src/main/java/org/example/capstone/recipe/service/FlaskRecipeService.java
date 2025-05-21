@@ -1,12 +1,16 @@
 package org.example.capstone.recipe.service;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.ContentType;
+import org.apache.http.entity.mime.HttpMultipartMode;
 import org.apache.http.entity.mime.MultipartEntityBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
@@ -26,12 +30,14 @@ import org.example.capstone.user.domain.User;
 import org.example.capstone.user.login.dto.CustomUserDetails;
 import org.example.capstone.user.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +71,14 @@ public class FlaskRecipeService {
     private final InstructionRepository instructionRepository;
     private final UserRepository userRepository;
     private final SatisfactionRepository satisfactionRepository;
+
+    @PostConstruct
+    public void init() {
+        // UTF-8 인코딩 설정
+        objectMapper.configure(JsonGenerator.Feature.ESCAPE_NON_ASCII, false);
+        // 추가 설정
+        objectMapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+    }
 
     /**
      * 사용자의 만족도 검색
@@ -113,15 +127,24 @@ public class FlaskRecipeService {
             log.info("Requesting to Flask URL: {}", fullUrl);
             log.info("사용자 정보: 사용자명={}, 요청자 ID={}", request.getUsername(), request.getUserId());
 
+            // 요청에 실을 데이터 로깅
+            log.info("지시사항: {}", request.getInstructions());
+
             // 이 부분에서 fullUrl을 사용하도록 수정
             HttpPost uploadFile = new HttpPost(fullUrl);
 
+            // UTF-8 인코딩 명시적 설정
             MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-            builder.addTextBody("instructions", request.getInstructions(), ContentType.TEXT_PLAIN);
-            builder.addTextBody("username", request.getUsername(), ContentType.TEXT_PLAIN);
+            builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
+            builder.setCharset(StandardCharsets.UTF_8);
+
+            // 지시사항 UTF-8로 인코딩하여 추가
+            ContentType textContentType = ContentType.create("text/plain", StandardCharsets.UTF_8);
+            builder.addTextBody("instructions", request.getInstructions(), textContentType);
+            builder.addTextBody("username", request.getUsername(), textContentType);
 
             if (request.getSessionId() != null) {
-                builder.addTextBody("sessionId", request.getSessionId(), ContentType.TEXT_PLAIN);
+                builder.addTextBody("sessionId", request.getSessionId(), textContentType);
             }
 
             if (request.getImage() != null && !request.getImage().isEmpty()) {
@@ -130,6 +153,19 @@ public class FlaskRecipeService {
                 String safeFilename = originalFilename != null ?
                         originalFilename.replaceAll("[^a-zA-Z0-9.\\-]", "_") :
                         "image.jpg";
+
+                // 확장자 처리 개선
+                String fileExt = "";
+                int lastDotIndex = safeFilename.lastIndexOf('.');
+                if (lastDotIndex > 0) {
+                    fileExt = safeFilename.substring(lastDotIndex).toLowerCase();
+                }
+                if (fileExt.isEmpty()) {
+                    fileExt = ".jpg";
+                    safeFilename += fileExt;
+                }
+
+                log.info("이미지 파일명: {}, 확장자: {}", safeFilename, fileExt);
 
                 builder.addBinaryBody(
                         "image",
@@ -142,9 +178,12 @@ public class FlaskRecipeService {
             HttpEntity multipart = builder.build();
             uploadFile.setEntity(multipart);
 
+            // 인코딩 헤더 추가
+            uploadFile.setHeader("Accept-Charset", "UTF-8");
+
             try (CloseableHttpResponse response = httpClient.execute(uploadFile)) {
                 HttpEntity responseEntity = response.getEntity();
-                String responseString = EntityUtils.toString(responseEntity);
+                String responseString = EntityUtils.toString(responseEntity, StandardCharsets.UTF_8);
                 log.info("Flask API Response for Recipe Generate: {}", responseString);
 
                 RecipeGenerateResponse flaskResponse = objectMapper.readValue(responseString, RecipeGenerateResponse.class);
@@ -248,6 +287,8 @@ public class FlaskRecipeService {
 
         return webClient.post()
                 .uri(substituteEndpoint)
+                .contentType(MediaType.APPLICATION_JSON)
+                .acceptCharset(StandardCharsets.UTF_8)
                 .bodyValue(Map.of(
                         "ori", request.getOriginalIngredient(),
                         "sub", request.getSubstituteIngredient(),

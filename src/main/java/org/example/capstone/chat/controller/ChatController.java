@@ -46,9 +46,6 @@ public class ChatController {
             log.debug("메시지 처리 - 사용자: {}, 메시지: {}", username, chatRequest.getMessage());
             chatRequest.setUsername(username);
 
-            // 이미지 처리 (이제 레시피 생성 기능으로 분리됨)
-            chatRequest.setImage(null);
-
             // 세션 ID 확인 및 처리
             if (chatRequest.getSessionId() == null || chatRequest.getSessionId().isEmpty()) {
                 // 세션 ID가 없으면 생성
