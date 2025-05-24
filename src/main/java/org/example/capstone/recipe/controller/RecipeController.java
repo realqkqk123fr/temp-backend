@@ -115,7 +115,7 @@ public class RecipeController {
     }
 
     /**
-     * 대체 재료 요청 API (강화된 오류 처리 및 응답 검증)
+     * 대체 재료 요청 API (LLM 기반 판단 적용)
      */
     @PostMapping("/api/recipe/substitute")
     public ResponseEntity<?> substituteIngredient(
@@ -165,18 +165,23 @@ public class RecipeController {
                 ));
             }
 
-            // Flask 서버에 대체 재료 요청
+            // Flask 서버에 대체 재료 요청 (LLM 판단)
             RecipeGenerateResponse response = recipeService.substituteIngredient(request).block();
 
             if (response != null) {
-                // 대체 불가능한 경우 검사 (강화된 검증)
-                boolean isSubstituteFailure = checkSubstituteFailure(response, request);
-
-                if (isSubstituteFailure) {
+                // Flask 응답에서 대체 실패 여부 확인 (LLM 판단 결과)
+                if (response.isSubstituteFailure()) {
                     // 대체 실패 시 명확한 오류 응답 반환
-                    String errorMessage = buildErrorMessage(response, request);
+                    String errorMessage = response.getDescription();
+                    if (errorMessage == null || errorMessage.isEmpty()) {
+                        errorMessage = String.format(
+                                "%s를 %s로 대체할 수 없습니다. 자세한 이유는 제공되지 않았습니다.",
+                                request.getOriginalIngredient(),
+                                request.getSubstituteIngredient()
+                        );
+                    }
 
-                    log.info("대체 재료 실패: {}", errorMessage);
+                    log.info("대체 재료 실패(LLM 판단): {}", errorMessage);
 
                     return ResponseEntity.ok().body(Map.of(
                             "success", false,
@@ -185,7 +190,7 @@ public class RecipeController {
                             "substituteFailure", true,
                             "originalIngredient", request.getOriginalIngredient(),
                             "substituteIngredient", request.getSubstituteIngredient(),
-                            "error", "SUBSTITUTE_NOT_POSSIBLE"
+                            "error", "SUBSTITUTE_NOT_POSSIBLE_LLM"
                     ));
                 }
 
@@ -203,7 +208,7 @@ public class RecipeController {
 
                 // 성공 응답에 추가 정보 포함
                 response.setSubstituteFailure(false);
-                log.info("대체 재료 성공: {} -> {}, 새 레시피: {}",
+                log.info("대체 재료 성공(LLM 판단): {} -> {}, 새 레시피: {}",
                         request.getOriginalIngredient(),
                         request.getSubstituteIngredient(),
                         response.getName());
@@ -479,7 +484,7 @@ public class RecipeController {
 
             String messageText = isSuccessful
                     ? String.format("%s를 %s로 대체한 레시피가 생성되었습니다: %s", original, substitute, recipeName)
-                    : String.format("%s를 %s로 대체할 수 없습니다.", original, substitute);
+                    : String.format("%s를 %s로 대체할 수 없습니다. 다른 재료를 시도해보세요.", original, substitute);
 
             Map<String, Object> notification = new HashMap<>();
             notification.put("type", "recipe_substituted");

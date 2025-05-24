@@ -284,7 +284,7 @@ public class FlaskRecipeService {
     }
 
     /**
-     * 대체 재료 요청 처리 - 개선된 버전
+     * 대체 재료 요청 처리 - LLM 기반 판단 적용
      */
     public Mono<RecipeGenerateResponse> substituteIngredient(SubstituteIngredientRequest request) {
         log.debug("대체 재료 요청: 원재료={}, 대체재료={}, 레시피={}, 레시피ID={}",
@@ -312,7 +312,7 @@ public class FlaskRecipeService {
         requestBody.put("sub", request.getSubstituteIngredient());
         requestBody.put("recipe", request.getRecipeName());
 
-        // 기존 레시피 데이터 추가
+        // 기존 레시피 데이터 추가 (LLM이 대체 가능성을 더 정확히 판단할 수 있도록)
         if (originalRecipe != null) {
             Map<String, Object> originalRecipeData = new HashMap<>();
 
@@ -347,6 +347,12 @@ public class FlaskRecipeService {
                     ingredientsList.size(), instructionsList.size());
         }
 
+        // 자동 수량 조정 옵션 포함
+        requestBody.put("autoAdjustAmount", request.isAutoAdjustAmount());
+
+        // 원본 레시피 포함 옵션 포함
+        requestBody.put("includeOriginalRecipe", request.isIncludeOriginalRecipe());
+
         // RecipeUpdateService 사용 (final 변수로 전달)
         final Recipe finalOriginalRecipe = originalRecipe;
 
@@ -361,26 +367,13 @@ public class FlaskRecipeService {
                     if (response != null) {
                         log.debug("대체 재료 요청 응답: {}", response.getName());
 
-                        // 대체 불가능한 경우 확인 (강화된 검사)
-                        boolean isSubstituteFailure =
-                                response.isSubstituteFailure() ||
-                                        (response.getDescription() != null && (
-                                                response.getDescription().contains("적절하지 않아") ||
-                                                        response.getDescription().contains("생성할 수 없") ||
-                                                        response.getDescription().contains("대체할 수 없") ||
-                                                        response.getDescription().contains("불가능") ||
-                                                        response.getDescription().contains("유사도"))) ||
-                                        (response.getIngredients() == null || response.getIngredients().isEmpty()) ||
-                                        (response.getInstructions() == null || response.getInstructions().isEmpty()) ||
-                                        (response.getName() == null || response.getName().trim().isEmpty());
-
-                        if (isSubstituteFailure) {
-                            log.info("대체 재료 사용 불가: {} -> {}, 사유: {}",
+                        // 대체 불가능 여부는 Flask 응답 그대로 사용 (LLM 판단 결과)
+                        if (response.isSubstituteFailure()) {
+                            log.info("대체 재료 사용 불가(LLM 판단): {} -> {}, 사유: {}",
                                     request.getOriginalIngredient(),
                                     request.getSubstituteIngredient(),
                                     response.getDescription());
 
-                            response.setSubstituteFailure(true);
                             return response;
                         }
 
@@ -399,8 +392,9 @@ public class FlaskRecipeService {
                                 log.info("기존 레시피 업데이트 완료 - ID: {}, 새 이름: {}",
                                         updatedRecipe.getId(), updatedRecipe.getName());
                             } else {
-                                // 새 레시피로 저장 (기존 로직)
+                                // 새 레시피로 저장
                                 log.warn("기존 레시피를 찾을 수 없어 새 레시피로 저장");
+                                // 여기에 새 레시피 저장 로직을 추가할 수 있음
                             }
                         } catch (Exception e) {
                             log.error("대체 레시피 저장 중 오류: {}", e.getMessage());
@@ -423,7 +417,7 @@ public class FlaskRecipeService {
         private final InstructionRepository instructionRepository;
 
         /**
-         * 기존 레시피를 대체 재료 응답으로 업데이트 (조리법 내 재료명 교체 포함)
+         * 기존 레시피를 대체 재료 응답으로 업데이트 (LLM 판단 결과 활용)
          */
         @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
         public Recipe updateExistingRecipe(Recipe originalRecipe, RecipeGenerateResponse response,
@@ -467,7 +461,7 @@ public class FlaskRecipeService {
                     log.debug("기존 조리법 {}개 삭제 완료", instructionsToDelete.size());
                 }
 
-                // 새 조리법 추가 (재료명 교체 로직 포함)
+                // 새 조리법 추가 (LLM이 생성한 조리법 사용)
                 List<Instruction> newInstructions = new ArrayList<>();
                 if (response.getInstructions() != null) {
                     for (InstructionDTO dto : response.getInstructions()) {
@@ -476,15 +470,11 @@ public class FlaskRecipeService {
                             cookingTimeSeconds = dto.getCookingTime() * 60;
                         }
 
-                        // 조리법 텍스트에서 원재료명을 대체재료명으로 교체 (강화된 로직)
-                        String updatedInstructionText = replaceIngredientInText(
-                                dto.getInstruction(),
-                                originalIngredient,
-                                substituteIngredient
-                        );
+                        // LLM이 이미 재료명을 업데이트했으므로 추가적인 교체는 필요 없음
+                        String instructionText = dto.getInstruction();
 
                         Instruction instruction = Instruction.builder()
-                                .instruction(updatedInstructionText) // 교체된 텍스트 사용
+                                .instruction(instructionText)
                                 .cookingTime(dto.getCookingTime())
                                 .cookingTimeSeconds(cookingTimeSeconds)
                                 .recipe(originalRecipe)
@@ -493,7 +483,7 @@ public class FlaskRecipeService {
                     }
                 }
                 originalRecipe.setInstructions(newInstructions);
-                log.debug("새 조리법 {}개 추가 완료 (재료명 교체 적용)", newInstructions.size());
+                log.debug("새 조리법 {}개 추가 완료 (LLM 생성)", newInstructions.size());
 
                 // 업데이트된 레시피 저장
                 Recipe savedRecipe = recipeRepository.save(originalRecipe);
