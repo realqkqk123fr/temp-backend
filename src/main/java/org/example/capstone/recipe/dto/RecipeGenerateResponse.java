@@ -19,4 +19,20 @@ public class RecipeGenerateResponse {
     private String imageUrl;
     private Long userId;        // 소유자 ID 필드 추가
     private boolean substituteFailure; // 추가: 대체 실패 여부
+
+    // 추가: 대체 재료 관련 정보
+    private SubstitutionInfo substitutionInfo;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SubstitutionInfo {
+        private String originalIngredient;
+        private String substituteIngredient;
+        private Double similarityScore;
+        private String estimatedAmount;
+        private String substitutionReason;
+        private List<String> cookingTips;
+    }
 }

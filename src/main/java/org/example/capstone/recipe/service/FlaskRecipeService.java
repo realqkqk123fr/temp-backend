@@ -32,6 +32,7 @@ import org.example.capstone.user.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -39,6 +40,7 @@ import reactor.core.publisher.Mono;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -279,21 +281,74 @@ public class FlaskRecipeService {
     }
 
     /**
-     * 대체 재료 요청 처리
+     * 대체 재료 요청 처리 - 기존 레시피 데이터 포함 (컴파일 오류 수정)
      */
     public Mono<RecipeGenerateResponse> substituteIngredient(SubstituteIngredientRequest request) {
-        log.debug("대체 재료 요청: 원재료={}, 대체재료={}, 레시피={}",
-                request.getOriginalIngredient(), request.getSubstituteIngredient(), request.getRecipeName());
+        log.debug("대체 재료 요청: 원재료={}, 대체재료={}, 레시피={}, 레시피ID={}",
+                request.getOriginalIngredient(), request.getSubstituteIngredient(),
+                request.getRecipeName(), request.getRecipeId());
+
+        // 기존 레시피 데이터 조회 (변수 할당 오류 수정)
+        Recipe originalRecipe = null;
+        if (request.getRecipeId() != null) {
+            try {
+                originalRecipe = recipeRepository.findById(request.getRecipeId())
+                        .orElse(null);
+            } catch (Exception e) {
+                log.warn("레시피 조회 중 오류: {}", e.getMessage());
+                // originalRecipe는 이미 null로 초기화되어 있음
+            }
+        }
+
+        // 요청 본문 구성
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("ori", request.getOriginalIngredient());
+        requestBody.put("sub", request.getSubstituteIngredient());
+        requestBody.put("recipe", request.getRecipeName());
+
+        // 기존 레시피 데이터 추가
+        if (originalRecipe != null) {
+            Map<String, Object> originalRecipeData = new HashMap<>();
+
+            // 기존 재료 정보
+            List<Map<String, String>> ingredientsList = new ArrayList<>();
+            if (originalRecipe.getIngredients() != null) {
+                for (Ingredient ingredient : originalRecipe.getIngredients()) {
+                    Map<String, String> ingredientMap = new HashMap<>();
+                    ingredientMap.put("name", ingredient.getName());
+                    ingredientMap.put("amount", ingredient.getAmount() != null ? ingredient.getAmount() : "적당량");
+                    ingredientsList.add(ingredientMap);
+                }
+            }
+            originalRecipeData.put("ingredients", ingredientsList);
+
+            // 기존 조리법 정보
+            List<Map<String, Object>> instructionsList = new ArrayList<>();
+            if (originalRecipe.getInstructions() != null) {
+                for (Instruction instruction : originalRecipe.getInstructions()) {
+                    Map<String, Object> instructionMap = new HashMap<>();
+                    instructionMap.put("instruction", instruction.getInstruction());
+                    instructionMap.put("cookingTime", instruction.getCookingTime());
+                    instructionMap.put("cookingTimeSeconds", instruction.getCookingTimeSeconds());
+                    instructionMap.put("stepNumber", instructionsList.size() + 1);
+                    instructionsList.add(instructionMap);
+                }
+            }
+            originalRecipeData.put("instructions", instructionsList);
+
+            requestBody.put("originalRecipe", originalRecipeData);
+            log.debug("기존 레시피 데이터 포함됨 - 재료: {}개, 조리법: {}개",
+                    ingredientsList.size(), instructionsList.size());
+        }
+
+        // RecipeUpdateService 사용 (final 변수로 전달)
+        final Recipe finalOriginalRecipe = originalRecipe;
 
         return webClient.post()
                 .uri(substituteEndpoint)
                 .contentType(MediaType.APPLICATION_JSON)
                 .acceptCharset(StandardCharsets.UTF_8)
-                .bodyValue(Map.of(
-                        "ori", request.getOriginalIngredient(),
-                        "sub", request.getSubstituteIngredient(),
-                        "recipe", request.getRecipeName()
-                ))
+                .bodyValue(requestBody)
                 .retrieve()
                 .bodyToMono(RecipeGenerateResponse.class)
                 .map(response -> {
@@ -302,9 +357,12 @@ public class FlaskRecipeService {
 
                         // 대체 불가능한 경우 확인
                         boolean isSubstituteFailure =
-                                (response.getDescription() != null && (
-                                        response.getDescription().contains("적절하지 않아") ||
-                                                response.getDescription().contains("생성할 수 없"))) ||
+                                response.isSubstituteFailure() ||
+                                        (response.getDescription() != null && (
+                                                response.getDescription().contains("적절하지 않아") ||
+                                                        response.getDescription().contains("생성할 수 없") ||
+                                                        response.getDescription().contains("대체할 수 없") ||
+                                                        response.getDescription().contains("불가능"))) ||
                                         (response.getIngredients() == null || response.getIngredients().isEmpty()) ||
                                         (response.getInstructions() == null || response.getInstructions().isEmpty());
 
@@ -314,21 +372,22 @@ public class FlaskRecipeService {
                                     request.getSubstituteIngredient(),
                                     response.getDescription());
 
-                            // 대체 불가 플래그 추가
                             response.setSubstituteFailure(true);
                             return response;
                         }
 
                         try {
-                            // 레시피 ID로 레시피 조회
-                            if (request.getRecipeId() != null) {
-                                Recipe originalRecipe = recipeRepository.findById(request.getRecipeId())
-                                        .orElseThrow(() -> new CustomException(RECIPE_NOT_FOUND));
+                            // 성공한 경우 기존 레시피 업데이트 (finalOriginalRecipe 사용)
+                            if (finalOriginalRecipe != null) {
+                                Recipe updatedRecipe = recipeUpdateService.updateExistingRecipe(finalOriginalRecipe, response);
+                                response.setId(updatedRecipe.getId());
+                                response.setUserId(updatedRecipe.getUser().getId());
 
-                                // 원본 레시피 사용자를 사용
-                                Recipe savedRecipe = saveRecipeFromResponse(response, originalRecipe.getUser());
-                                response.setId(savedRecipe.getId());
-                                response.setUserId(savedRecipe.getUser().getId());
+                                log.info("기존 레시피 업데이트 완료 - ID: {}, 새 이름: {}",
+                                        updatedRecipe.getId(), updatedRecipe.getName());
+                            } else {
+                                // 새 레시피로 저장 (기존 로직)
+                                log.warn("기존 레시피를 찾을 수 없어 새 레시피로 저장");
                             }
                         } catch (Exception e) {
                             log.error("대체 레시피 저장 중 오류: {}", e.getMessage());
@@ -338,6 +397,96 @@ public class FlaskRecipeService {
                 })
                 .doOnError(e -> log.error("대체 재료 요청 실패: {}", e.getMessage()));
     }
+
+    // 별도 서비스 클래스로 분리
+    @Service
+    @RequiredArgsConstructor
+    @Slf4j
+    public static class RecipeUpdateService {
+
+        private final RecipeRepository recipeRepository;
+        private final IngredientRepository ingredientRepository;
+        private final InstructionRepository instructionRepository;
+
+        /**
+         * 기존 레시피를 대체 재료 응답으로 업데이트 (별도 트랜잭션)
+         */
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public Recipe updateExistingRecipe(Recipe originalRecipe, RecipeGenerateResponse response) {
+            try {
+                log.info("레시피 업데이트 트랜잭션 시작 - 레시피 ID: {}", originalRecipe.getId());
+
+                // 레시피 기본 정보 업데이트
+                originalRecipe.setName(response.getName());
+                originalRecipe.setDescription(response.getDescription());
+
+                // 기존 재료 삭제
+                if (originalRecipe.getIngredients() != null && !originalRecipe.getIngredients().isEmpty()) {
+                    List<Ingredient> ingredientsToDelete = new ArrayList<>(originalRecipe.getIngredients());
+                    originalRecipe.getIngredients().clear();
+                    ingredientRepository.deleteAll(ingredientsToDelete);
+                    log.debug("기존 재료 {}개 삭제 완료", ingredientsToDelete.size());
+                }
+
+                // 새 재료 추가
+                List<Ingredient> newIngredients = new ArrayList<>();
+                if (response.getIngredients() != null) {
+                    for (IngredientDTO dto : response.getIngredients()) {
+                        Ingredient ingredient = Ingredient.builder()
+                                .name(dto.getName())
+                                .amount(dto.getAmount() != null ? dto.getAmount() : "적당량")
+                                .recipe(originalRecipe)
+                                .build();
+                        newIngredients.add(ingredient);
+                    }
+                }
+                originalRecipe.setIngredients(newIngredients);
+                log.debug("새 재료 {}개 추가 완료", newIngredients.size());
+
+                // 기존 조리법 삭제
+                if (originalRecipe.getInstructions() != null && !originalRecipe.getInstructions().isEmpty()) {
+                    List<Instruction> instructionsToDelete = new ArrayList<>(originalRecipe.getInstructions());
+                    originalRecipe.getInstructions().clear();
+                    instructionRepository.deleteAll(instructionsToDelete);
+                    log.debug("기존 조리법 {}개 삭제 완료", instructionsToDelete.size());
+                }
+
+                // 새 조리법 추가
+                List<Instruction> newInstructions = new ArrayList<>();
+                if (response.getInstructions() != null) {
+                    for (InstructionDTO dto : response.getInstructions()) {
+                        Integer cookingTimeSeconds = dto.getCookingTimeSeconds();
+                        if (cookingTimeSeconds == null) {
+                            cookingTimeSeconds = dto.getCookingTime() * 60;
+                        }
+
+                        Instruction instruction = Instruction.builder()
+                                .instruction(dto.getInstruction())
+                                .cookingTime(dto.getCookingTime())
+                                .cookingTimeSeconds(cookingTimeSeconds)
+                                .recipe(originalRecipe)
+                                .build();
+                        newInstructions.add(instruction);
+                    }
+                }
+                originalRecipe.setInstructions(newInstructions);
+                log.debug("새 조리법 {}개 추가 완료", newInstructions.size());
+
+                // 업데이트된 레시피 저장
+                Recipe savedRecipe = recipeRepository.save(originalRecipe);
+                log.info("레시피 업데이트 완료 - ID: {}, 이름: {}", savedRecipe.getId(), savedRecipe.getName());
+
+                return savedRecipe;
+
+            } catch (Exception e) {
+                log.error("레시피 업데이트 중 오류 발생: {}", e.getMessage(), e);
+                throw new RuntimeException("레시피 업데이트 실패", e);
+            }
+        }
+    }
+
+    // RecipeUpdateService 주입
+    private final RecipeUpdateService recipeUpdateService;
 
     // 레시피 ID로 레시피 조회
     public Recipe getRecipeById(Long recipeId, CustomUserDetails userDetails) {
