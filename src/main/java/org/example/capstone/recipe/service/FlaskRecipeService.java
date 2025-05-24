@@ -44,6 +44,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
@@ -411,6 +412,7 @@ public class FlaskRecipeService {
     }
 
     // 별도 서비스 클래스로 분리 - 재료명 교체 로직 추가
+    // RecipeUpdateService 클래스
     @Service
     @RequiredArgsConstructor
     @Slf4j
@@ -474,7 +476,7 @@ public class FlaskRecipeService {
                             cookingTimeSeconds = dto.getCookingTime() * 60;
                         }
 
-                        // 조리법 텍스트에서 원재료명을 대체재료명으로 교체
+                        // 조리법 텍스트에서 원재료명을 대체재료명으로 교체 (강화된 로직)
                         String updatedInstructionText = replaceIngredientInText(
                                 dto.getInstruction(),
                                 originalIngredient,
@@ -506,32 +508,83 @@ public class FlaskRecipeService {
         }
 
         /**
-         * 조리법 텍스트에서 재료명 교체
+         * 조리법 텍스트에서 재료명 교체 (강화된 로직)
          */
         private String replaceIngredientInText(String instructionText, String originalIngredient, String substituteIngredient) {
-            if (instructionText == null || instructionText.trim().isEmpty()) {
+            if (instructionText == null || instructionText.trim().isEmpty() ||
+                    originalIngredient == null || substituteIngredient == null) {
                 return instructionText;
             }
 
             String updatedText = instructionText;
 
             try {
-                // 1. 정확히 일치하는 경우 (대소문자 구분 없음)
+                // 1. 정확히 일치하는 경우 (단어 경계 사용)
                 String exactPattern = "(?i)\\b" + Pattern.quote(originalIngredient) + "\\b";
                 updatedText = updatedText.replaceAll(exactPattern, substituteIngredient);
 
-                // 2. 부분 일치하는 경우도 고려 (예: "버터" -> "마가린"에서 "무염버터" -> "무염마가린")
+                // 2. 부분 일치 고려 (여러 변형 처리)
+                // 예: "무염버터" -> "무염마가린"
                 if (!originalIngredient.equals(substituteIngredient)) {
                     // 원재료가 다른 단어의 일부인 경우 처리
                     String partialPattern = "(?i)" + Pattern.quote(originalIngredient);
+
+                    // 원재료가 포함되지만 대체재료는 포함되지 않은 경우에만 교체
                     if (updatedText.toLowerCase().contains(originalIngredient.toLowerCase()) &&
                             !updatedText.toLowerCase().contains(substituteIngredient.toLowerCase())) {
-                        updatedText = updatedText.replaceAll(partialPattern, substituteIngredient);
+                        updatedText = Pattern.compile(partialPattern, Pattern.CASE_INSENSITIVE)
+                                .matcher(updatedText)
+                                .replaceAll(substituteIngredient);
+                    }
+
+                    // 다른 형태의 변형도 고려 (공백, 하이픈, 언더스코어 등이 제거된 형태)
+                    String originalNoSpace = originalIngredient.replace(" ", "");
+                    String originalNoHyphen = originalIngredient.replace("-", "");
+                    String originalNoUnderscore = originalIngredient.replace("_", "");
+
+                    String[] originalVariants = {
+                            originalNoSpace,
+                            originalNoHyphen,
+                            originalNoUnderscore
+                    };
+
+                    for (String variant : originalVariants) {
+                        if (!variant.equals(originalIngredient) &&
+                                updatedText.toLowerCase().contains(variant.toLowerCase())) {
+                            String variantPattern = "(?i)\\b" + Pattern.quote(variant) + "\\b";
+                            updatedText = updatedText.replaceAll(variantPattern, substituteIngredient);
+                        }
+                    }
+
+                    // 3. 복합어 처리 (예: "쇠고기국물" -> "닭고기국물")
+                    // 원재료가 다른 단어의 접두사나 접미사로 사용되는 경우
+                    if (originalIngredient.length() >= 2) {
+                        // 2글자 이상인 경우에만 적용 (너무 짧은 단어는 위험함)
+                        String compoundPattern = "(?i)([가-힣a-z]+)?" + Pattern.quote(originalIngredient) + "([가-힣a-z]+)?";
+
+                        Pattern pattern = Pattern.compile(compoundPattern, Pattern.CASE_INSENSITIVE);
+                        Matcher matcher = pattern.matcher(updatedText);
+
+                        StringBuffer sb = new StringBuffer();
+                        while (matcher.find()) {
+                            String prefix = matcher.group(1) != null ? matcher.group(1) : "";
+                            String suffix = matcher.group(2) != null ? matcher.group(2) : "";
+
+                            // 접두사나 접미사가 있는 경우 (복합어)
+                            if (!prefix.isEmpty() || !suffix.isEmpty()) {
+                                matcher.appendReplacement(sb, prefix + substituteIngredient + suffix);
+                            } else {
+                                // 정확히 일치하는 경우는 이미 처리했으므로 여기서는 건너뜀
+                                matcher.appendReplacement(sb, matcher.group(0));
+                            }
+                        }
+                        matcher.appendTail(sb);
+                        updatedText = sb.toString();
                     }
                 }
 
-                // 3. 로깅
-                if (!instructionText.equals(updatedText)) {
+                // 변경 로깅
+                if (!updatedText.equals(instructionText)) {
                     log.debug("조리법 텍스트 교체됨: '{}' -> '{}'",
                             instructionText.substring(0, Math.min(50, instructionText.length())),
                             updatedText.substring(0, Math.min(50, updatedText.length())));

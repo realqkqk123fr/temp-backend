@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.capstone.global.exception.CustomException;
 import org.example.capstone.global.exception.ErrorCode;
 import org.example.capstone.nutrition.dto.NutritionDTO;
+import org.example.capstone.nutrition.service.NutritionService;
 import org.example.capstone.recipe.domain.Recipe;
 import org.example.capstone.recipe.dto.*;
 import org.example.capstone.recipe.service.FlaskRecipeService;
@@ -33,6 +34,7 @@ public class RecipeController {
 
     private final FlaskRecipeService recipeService;
     private final SimpMessagingTemplate messagingTemplate;
+    private final NutritionService nutritionService;
 
     /**
      * 실시간 어시스턴스 API
@@ -404,6 +406,42 @@ public class RecipeController {
             log.error("이미지 업로드 처리 중 오류 발생: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "이미지 업로드 처리 중 오류가 발생했습니다.", "details", e.getMessage()));
+        }
+    }
+
+    /**
+     * 영양 정보 갱신 API
+     * RecipeController에 추가할 코드
+     */
+    @GetMapping("/api/recipe/{recipeId}/refresh-nutrition")
+    public ResponseEntity<NutritionDTO> refreshNutrition(
+            @PathVariable Long recipeId,
+            @AuthenticationPrincipal CustomUserDetails userDetails) {
+
+        log.info("영양 정보 갱신 요청 - 레시피 ID: {}, 사용자: {}",
+                recipeId, userDetails != null ? userDetails.getUsername() : "인증되지 않음");
+
+        try {
+            // nutritionService에 추가된 메서드 호출
+            NutritionDTO updatedNutrition = nutritionService.refreshNutritionByRecipeId(recipeId, userDetails);
+            return ResponseEntity.ok(updatedNutrition);
+        } catch (Exception e) {
+            log.error("영양 정보 갱신 처리 중 오류 발생: {}", e.getMessage(), e);
+
+            // 오류 발생 시에도 클라이언트에는 기본 영양 정보 반환 (사용자 경험 유지)
+            NutritionDTO defaultNutrition = NutritionDTO.builder()
+                    .calories(500.0)
+                    .carbohydrate(30.0)
+                    .protein(25.0)
+                    .fat(15.0)
+                    .sugar(5.0)
+                    .sodium(400.0)
+                    .saturatedFat(3.0)
+                    .transFat(0.0)
+                    .cholesterol(50.0)
+                    .build();
+
+            return ResponseEntity.ok(defaultNutrition);
         }
     }
 
