@@ -32,6 +32,7 @@ import org.example.capstone.user.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -44,6 +45,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 import static org.example.capstone.global.exception.ErrorCode.*;
 
@@ -281,22 +283,25 @@ public class FlaskRecipeService {
     }
 
     /**
-     * 대체 재료 요청 처리 - 기존 레시피 데이터 포함 (컴파일 오류 수정)
+     * 대체 재료 요청 처리 - 개선된 버전
      */
     public Mono<RecipeGenerateResponse> substituteIngredient(SubstituteIngredientRequest request) {
         log.debug("대체 재료 요청: 원재료={}, 대체재료={}, 레시피={}, 레시피ID={}",
                 request.getOriginalIngredient(), request.getSubstituteIngredient(),
                 request.getRecipeName(), request.getRecipeId());
 
-        // 기존 레시피 데이터 조회 (변수 할당 오류 수정)
+        // 기존 레시피 데이터 조회
         Recipe originalRecipe = null;
         if (request.getRecipeId() != null) {
             try {
                 originalRecipe = recipeRepository.findById(request.getRecipeId())
                         .orElse(null);
+
+                if (originalRecipe != null) {
+                    log.info("기존 레시피 발견 - ID: {}, 이름: {}", originalRecipe.getId(), originalRecipe.getName());
+                }
             } catch (Exception e) {
                 log.warn("레시피 조회 중 오류: {}", e.getMessage());
-                // originalRecipe는 이미 null로 초기화되어 있음
             }
         }
 
@@ -355,16 +360,18 @@ public class FlaskRecipeService {
                     if (response != null) {
                         log.debug("대체 재료 요청 응답: {}", response.getName());
 
-                        // 대체 불가능한 경우 확인
+                        // 대체 불가능한 경우 확인 (강화된 검사)
                         boolean isSubstituteFailure =
                                 response.isSubstituteFailure() ||
                                         (response.getDescription() != null && (
                                                 response.getDescription().contains("적절하지 않아") ||
                                                         response.getDescription().contains("생성할 수 없") ||
                                                         response.getDescription().contains("대체할 수 없") ||
-                                                        response.getDescription().contains("불가능"))) ||
+                                                        response.getDescription().contains("불가능") ||
+                                                        response.getDescription().contains("유사도"))) ||
                                         (response.getIngredients() == null || response.getIngredients().isEmpty()) ||
-                                        (response.getInstructions() == null || response.getInstructions().isEmpty());
+                                        (response.getInstructions() == null || response.getInstructions().isEmpty()) ||
+                                        (response.getName() == null || response.getName().trim().isEmpty());
 
                         if (isSubstituteFailure) {
                             log.info("대체 재료 사용 불가: {} -> {}, 사유: {}",
@@ -377,9 +384,14 @@ public class FlaskRecipeService {
                         }
 
                         try {
-                            // 성공한 경우 기존 레시피 업데이트 (finalOriginalRecipe 사용)
+                            // 성공한 경우 기존 레시피 업데이트
                             if (finalOriginalRecipe != null) {
-                                Recipe updatedRecipe = recipeUpdateService.updateExistingRecipe(finalOriginalRecipe, response);
+                                Recipe updatedRecipe = recipeUpdateService.updateExistingRecipe(
+                                        finalOriginalRecipe,
+                                        response,
+                                        request.getOriginalIngredient(),
+                                        request.getSubstituteIngredient()
+                                );
                                 response.setId(updatedRecipe.getId());
                                 response.setUserId(updatedRecipe.getUser().getId());
 
@@ -398,7 +410,7 @@ public class FlaskRecipeService {
                 .doOnError(e -> log.error("대체 재료 요청 실패: {}", e.getMessage()));
     }
 
-    // 별도 서비스 클래스로 분리
+    // 별도 서비스 클래스로 분리 - 재료명 교체 로직 추가
     @Service
     @RequiredArgsConstructor
     @Slf4j
@@ -409,12 +421,14 @@ public class FlaskRecipeService {
         private final InstructionRepository instructionRepository;
 
         /**
-         * 기존 레시피를 대체 재료 응답으로 업데이트 (별도 트랜잭션)
+         * 기존 레시피를 대체 재료 응답으로 업데이트 (조리법 내 재료명 교체 포함)
          */
-        @Transactional(propagation = Propagation.REQUIRES_NEW)
-        public Recipe updateExistingRecipe(Recipe originalRecipe, RecipeGenerateResponse response) {
+        @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
+        public Recipe updateExistingRecipe(Recipe originalRecipe, RecipeGenerateResponse response,
+                                           String originalIngredient, String substituteIngredient) {
             try {
-                log.info("레시피 업데이트 트랜잭션 시작 - 레시피 ID: {}", originalRecipe.getId());
+                log.info("레시피 업데이트 트랜잭션 시작 - 레시피 ID: {}, 재료 교체: {} -> {}",
+                        originalRecipe.getId(), originalIngredient, substituteIngredient);
 
                 // 레시피 기본 정보 업데이트
                 originalRecipe.setName(response.getName());
@@ -451,7 +465,7 @@ public class FlaskRecipeService {
                     log.debug("기존 조리법 {}개 삭제 완료", instructionsToDelete.size());
                 }
 
-                // 새 조리법 추가
+                // 새 조리법 추가 (재료명 교체 로직 포함)
                 List<Instruction> newInstructions = new ArrayList<>();
                 if (response.getInstructions() != null) {
                     for (InstructionDTO dto : response.getInstructions()) {
@@ -460,8 +474,15 @@ public class FlaskRecipeService {
                             cookingTimeSeconds = dto.getCookingTime() * 60;
                         }
 
+                        // 조리법 텍스트에서 원재료명을 대체재료명으로 교체
+                        String updatedInstructionText = replaceIngredientInText(
+                                dto.getInstruction(),
+                                originalIngredient,
+                                substituteIngredient
+                        );
+
                         Instruction instruction = Instruction.builder()
-                                .instruction(dto.getInstruction())
+                                .instruction(updatedInstructionText) // 교체된 텍스트 사용
                                 .cookingTime(dto.getCookingTime())
                                 .cookingTimeSeconds(cookingTimeSeconds)
                                 .recipe(originalRecipe)
@@ -470,7 +491,7 @@ public class FlaskRecipeService {
                     }
                 }
                 originalRecipe.setInstructions(newInstructions);
-                log.debug("새 조리법 {}개 추가 완료", newInstructions.size());
+                log.debug("새 조리법 {}개 추가 완료 (재료명 교체 적용)", newInstructions.size());
 
                 // 업데이트된 레시피 저장
                 Recipe savedRecipe = recipeRepository.save(originalRecipe);
@@ -482,6 +503,46 @@ public class FlaskRecipeService {
                 log.error("레시피 업데이트 중 오류 발생: {}", e.getMessage(), e);
                 throw new RuntimeException("레시피 업데이트 실패", e);
             }
+        }
+
+        /**
+         * 조리법 텍스트에서 재료명 교체
+         */
+        private String replaceIngredientInText(String instructionText, String originalIngredient, String substituteIngredient) {
+            if (instructionText == null || instructionText.trim().isEmpty()) {
+                return instructionText;
+            }
+
+            String updatedText = instructionText;
+
+            try {
+                // 1. 정확히 일치하는 경우 (대소문자 구분 없음)
+                String exactPattern = "(?i)\\b" + Pattern.quote(originalIngredient) + "\\b";
+                updatedText = updatedText.replaceAll(exactPattern, substituteIngredient);
+
+                // 2. 부분 일치하는 경우도 고려 (예: "버터" -> "마가린"에서 "무염버터" -> "무염마가린")
+                if (!originalIngredient.equals(substituteIngredient)) {
+                    // 원재료가 다른 단어의 일부인 경우 처리
+                    String partialPattern = "(?i)" + Pattern.quote(originalIngredient);
+                    if (updatedText.toLowerCase().contains(originalIngredient.toLowerCase()) &&
+                            !updatedText.toLowerCase().contains(substituteIngredient.toLowerCase())) {
+                        updatedText = updatedText.replaceAll(partialPattern, substituteIngredient);
+                    }
+                }
+
+                // 3. 로깅
+                if (!instructionText.equals(updatedText)) {
+                    log.debug("조리법 텍스트 교체됨: '{}' -> '{}'",
+                            instructionText.substring(0, Math.min(50, instructionText.length())),
+                            updatedText.substring(0, Math.min(50, updatedText.length())));
+                }
+
+            } catch (Exception e) {
+                log.warn("조리법 텍스트 교체 중 오류 (원본 유지): {}", e.getMessage());
+                return instructionText; // 오류 시 원본 반환
+            }
+
+            return updatedText;
         }
     }
 

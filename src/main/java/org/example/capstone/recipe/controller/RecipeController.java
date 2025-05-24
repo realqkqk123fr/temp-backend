@@ -113,7 +113,7 @@ public class RecipeController {
     }
 
     /**
-     * 대체 재료 요청 API (개선된 버전)
+     * 대체 재료 요청 API (강화된 오류 처리 및 응답 검증)
      */
     @PostMapping("/api/recipe/substitute")
     public ResponseEntity<?> substituteIngredient(
@@ -129,88 +129,62 @@ public class RecipeController {
                     request.getRecipeName());
 
             // 필수 필드 검증
+            List<String> missingFields = new ArrayList<>();
             if (request.getOriginalIngredient() == null || request.getOriginalIngredient().trim().isEmpty()) {
-                log.warn("원재료가 비어있음");
-                return ResponseEntity.badRequest().body(
-                        Map.of(
-                                "success", false,
-                                "message", "원재료를 입력해주세요.",
-                                "substituteFailure", true
-                        )
-                );
+                missingFields.add("원재료");
             }
-
             if (request.getSubstituteIngredient() == null || request.getSubstituteIngredient().trim().isEmpty()) {
-                log.warn("대체재료가 비어있음");
-                return ResponseEntity.badRequest().body(
-                        Map.of(
-                                "success", false,
-                                "message", "대체재료를 입력해주세요.",
-                                "substituteFailure", true
-                        )
-                );
+                missingFields.add("대체재료");
+            }
+            if (request.getRecipeName() == null || request.getRecipeName().trim().isEmpty()) {
+                missingFields.add("레시피명");
             }
 
-            if (request.getRecipeName() == null || request.getRecipeName().trim().isEmpty()) {
-                log.warn("레시피명이 비어있음");
-                return ResponseEntity.badRequest().body(
-                        Map.of(
-                                "success", false,
-                                "message", "레시피명이 필요합니다.",
-                                "substituteFailure", true
-                        )
-                );
+            if (!missingFields.isEmpty()) {
+                String errorMessage = String.join(", ", missingFields) + "를 입력해주세요.";
+                log.warn("필수 필드 누락: {}", errorMessage);
+
+                return ResponseEntity.badRequest().body(Map.of(
+                        "success", false,
+                        "message", errorMessage,
+                        "substituteFailure", true,
+                        "error", "MISSING_REQUIRED_FIELDS"
+                ));
             }
 
             // 같은 재료인지 확인
             if (request.getOriginalIngredient().trim().equalsIgnoreCase(request.getSubstituteIngredient().trim())) {
                 log.warn("동일한 재료로 대체 시도: {}", request.getOriginalIngredient());
-                return ResponseEntity.badRequest().body(
-                        Map.of(
-                                "success", false,
-                                "message", "같은 재료로는 대체할 수 없습니다.",
-                                "substituteFailure", true
-                        )
-                );
+                return ResponseEntity.badRequest().body(Map.of(
+                        "success", false,
+                        "message", "같은 재료로는 대체할 수 없습니다.",
+                        "substituteFailure", true,
+                        "error", "SAME_INGREDIENT"
+                ));
             }
 
             // Flask 서버에 대체 재료 요청
             RecipeGenerateResponse response = recipeService.substituteIngredient(request).block();
 
             if (response != null) {
-                // 대체 불가능한 경우 검사
-                boolean isSubstituteFailure =
-                        response.isSubstituteFailure() || // 명시적 실패 플래그
-                                (response.getDescription() != null && (
-                                        response.getDescription().contains("적절하지 않") ||
-                                                response.getDescription().contains("생성할 수 없") ||
-                                                response.getDescription().contains("대체할 수 없") ||
-                                                response.getDescription().contains("불가능") ||
-                                                response.getDescription().contains("적절하지 않아"))) ||
-                                (response.getIngredients() == null || response.getIngredients().isEmpty()) ||
-                                (response.getInstructions() == null || response.getInstructions().isEmpty()) ||
-                                (response.getName() == null || response.getName().trim().isEmpty());
+                // 대체 불가능한 경우 검사 (강화된 검증)
+                boolean isSubstituteFailure = checkSubstituteFailure(response, request);
 
                 if (isSubstituteFailure) {
                     // 대체 실패 시 명확한 오류 응답 반환
-                    String errorMessage = response.getDescription() != null ?
-                            response.getDescription() :
-                            String.format("%s를 %s로 대체할 수 없습니다.",
-                                    request.getOriginalIngredient(),
-                                    request.getSubstituteIngredient());
+                    String errorMessage = buildErrorMessage(response, request);
 
                     log.info("대체 재료 실패: {}", errorMessage);
 
-                    return ResponseEntity.ok().body(
-                            Map.of(
-                                    "success", false,
-                                    "message", errorMessage,
-                                    "description", errorMessage,
-                                    "substituteFailure", true,
-                                    "originalIngredient", request.getOriginalIngredient(),
-                                    "substituteIngredient", request.getSubstituteIngredient()
-                            )
-                    );
+                    return ResponseEntity.ok().body(Map.of(
+                            "success", false,
+                            "message", errorMessage,
+                            "description", errorMessage,
+                            "substituteFailure", true,
+                            "originalIngredient", request.getOriginalIngredient(),
+                            "substituteIngredient", request.getSubstituteIngredient(),
+                            "error", "SUBSTITUTE_NOT_POSSIBLE"
+                    ));
                 }
 
                 // 성공한 경우 WebSocket 알림 전송
@@ -232,38 +206,182 @@ public class RecipeController {
                         request.getSubstituteIngredient(),
                         response.getName());
 
-                return ResponseEntity.ok(response);
+                // 성공 응답에 메타데이터 추가
+                Map<String, Object> successResponse = new HashMap<>();
+                successResponse.put("success", true);
+                successResponse.put("id", response.getId());
+                successResponse.put("name", response.getName());
+                successResponse.put("description", response.getDescription());
+                successResponse.put("ingredients", response.getIngredients());
+                successResponse.put("instructions", response.getInstructions());
+                successResponse.put("userId", response.getUserId());
+                successResponse.put("substituteFailure", false);
+
+                // 대체 정보 추가
+                if (response.getSubstitutionInfo() != null) {
+                    successResponse.put("substitutionInfo", response.getSubstitutionInfo());
+                } else {
+                    // 기본 대체 정보 생성
+                    Map<String, Object> substitutionInfo = new HashMap<>();
+                    substitutionInfo.put("original", request.getOriginalIngredient());
+                    substitutionInfo.put("substitute", request.getSubstituteIngredient());
+                    successResponse.put("substitutionInfo", substitutionInfo);
+                }
+
+                return ResponseEntity.ok(successResponse);
             } else {
                 log.error("Flask 서버로부터 null 응답 수신");
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                         .body(Map.of(
                                 "success", false,
-                                "message", "서버에서 응답을 받지 못했습니다. 잠시 후 다시 시도해주세요.",
-                                "substituteFailure", true
+                                "message", "AI 서버에서 응답을 받지 못했습니다. 잠시 후 다시 시도해주세요.",
+                                "substituteFailure", true,
+                                "error", "NO_RESPONSE_FROM_AI"
                         ));
             }
         } catch (Exception e) {
             log.error("대체 재료 요청 중 오류 발생: {}", e.getMessage(), e);
 
             // 예외 타입에 따른 구체적인 오류 메시지
-            String errorMessage;
-            if (e instanceof java.util.concurrent.TimeoutException) {
-                errorMessage = "요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.";
-            } else if (e instanceof java.net.ConnectException) {
-                errorMessage = "AI 서버와 연결할 수 없습니다. 잠시 후 다시 시도해주세요.";
-            } else if (e.getMessage() != null && e.getMessage().contains("404")) {
-                errorMessage = "요청한 리소스를 찾을 수 없습니다.";
-            } else {
-                errorMessage = "대체 재료 처리 중 오류가 발생했습니다. 다시 시도해주세요.";
-            }
+            String errorMessage = buildExceptionErrorMessage(e);
+            String errorCode = getErrorCodeFromException(e);
 
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of(
                             "success", false,
                             "message", errorMessage,
-                            "error", e.getMessage() != null ? e.getMessage() : "알 수 없는 오류",
-                            "substituteFailure", true
+                            "error", errorCode,
+                            "substituteFailure", true,
+                            "details", e.getMessage() != null ? e.getMessage() : "알 수 없는 오류"
                     ));
+        }
+    }
+
+    /**
+     * 대체 실패 여부 검사 (강화된 로직)
+     */
+    private boolean checkSubstituteFailure(RecipeGenerateResponse response, SubstituteIngredientRequest request) {
+        // 1. 명시적 실패 플래그 확인
+        if (response.isSubstituteFailure()) {
+            log.debug("명시적 실패 플래그 감지");
+            return true;
+        }
+
+        // 2. 설명 텍스트에서 실패 키워드 검사
+        if (response.getDescription() != null) {
+            String description = response.getDescription().toLowerCase();
+            String[] failureKeywords = {
+                    "적절하지 않", "생성할 수 없", "대체할 수 없", "불가능",
+                    "적절하지 않아", "유사도", "레시피를 생성할 수 없습니다"
+            };
+
+            for (String keyword : failureKeywords) {
+                if (description.contains(keyword)) {
+                    log.debug("설명에서 실패 키워드 감지: {}", keyword);
+                    return true;
+                }
+            }
+        }
+
+        // 3. 레시피 이름에서 실패 표시 검사
+        if (response.getName() != null) {
+            String name = response.getName().toLowerCase();
+            if (name.contains("적절하지 않") || name.contains("생성할 수 없")) {
+                log.debug("레시피 이름에서 실패 표시 감지");
+                return true;
+            }
+        }
+
+        // 4. 필수 데이터 누락 확인
+        if (response.getIngredients() == null || response.getIngredients().isEmpty()) {
+            log.debug("재료 데이터 누락 감지");
+            return true;
+        }
+
+        if (response.getInstructions() == null || response.getInstructions().isEmpty()) {
+            log.debug("조리법 데이터 누락 감지");
+            return true;
+        }
+
+        if (response.getName() == null || response.getName().trim().isEmpty()) {
+            log.debug("레시피 이름 누락 감지");
+            return true;
+        }
+
+        // 5. 재료 목록에서 대체 재료 확인
+        boolean substituteFound = false;
+        if (response.getIngredients() != null) {
+            for (IngredientDTO ingredient : response.getIngredients()) {
+                if (ingredient.getName() != null &&
+                        ingredient.getName().toLowerCase().contains(request.getSubstituteIngredient().toLowerCase())) {
+                    substituteFound = true;
+                    break;
+                }
+            }
+        }
+
+        if (!substituteFound) {
+            log.debug("대체 재료가 최종 재료 목록에 포함되지 않음");
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 오류 메시지 생성
+     */
+    private String buildErrorMessage(RecipeGenerateResponse response, SubstituteIngredientRequest request) {
+        if (response.getDescription() != null && !response.getDescription().trim().isEmpty()) {
+            return response.getDescription();
+        }
+
+        if (response.getName() != null && response.getName().contains("적절하지 않")) {
+            return response.getName();
+        }
+
+        // 기본 오류 메시지
+        return String.format(
+                "%s를 %s로 대체할 수 없습니다. 재료의 특성이 너무 달라 적절한 레시피를 만들 수 없습니다. " +
+                        "더 유사한 특성을 가진 재료로 시도해보세요.",
+                request.getOriginalIngredient(),
+                request.getSubstituteIngredient()
+        );
+    }
+
+    /**
+     * 예외로부터 오류 메시지 생성
+     */
+    private String buildExceptionErrorMessage(Exception e) {
+        if (e instanceof java.util.concurrent.TimeoutException) {
+            return "AI 처리 시간이 너무 오래 걸리고 있습니다. 잠시 후 다시 시도해주세요.";
+        } else if (e instanceof java.net.ConnectException) {
+            return "AI 서버와 연결할 수 없습니다. 네트워크 상태를 확인하고 잠시 후 다시 시도해주세요.";
+        } else if (e.getMessage() != null && e.getMessage().contains("404")) {
+            return "요청한 리소스를 찾을 수 없습니다. 서버 설정을 확인해주세요.";
+        } else if (e.getMessage() != null && e.getMessage().contains("500")) {
+            return "AI 서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
+        } else if (e.getMessage() != null && e.getMessage().contains("timeout")) {
+            return "요청 시간이 초과되었습니다. AI 분석에 시간이 오래 걸리고 있습니다.";
+        } else {
+            return "대체 재료 처리 중 예상치 못한 오류가 발생했습니다. 다시 시도해주세요.";
+        }
+    }
+
+    /**
+     * 예외로부터 오류 코드 생성
+     */
+    private String getErrorCodeFromException(Exception e) {
+        if (e instanceof java.util.concurrent.TimeoutException) {
+            return "TIMEOUT_ERROR";
+        } else if (e instanceof java.net.ConnectException) {
+            return "CONNECTION_ERROR";
+        } else if (e.getMessage() != null && e.getMessage().contains("404")) {
+            return "RESOURCE_NOT_FOUND";
+        } else if (e.getMessage() != null && e.getMessage().contains("500")) {
+            return "AI_SERVER_ERROR";
+        } else {
+            return "INTERNAL_ERROR";
         }
     }
 
@@ -293,41 +411,55 @@ public class RecipeController {
      * 레시피 생성 알림을 WebSocket으로 전송
      */
     private void sendRecipeNotification(String username, String recipeName) {
-        Map<String, Object> notification = new HashMap<>();
-        notification.put("type", "recipe_generated");
-        notification.put("message", "새로운 레시피가 생성되었습니다: " + recipeName);
-        notification.put("username", "시스템");
+        try {
+            Map<String, Object> notification = new HashMap<>();
+            notification.put("type", "recipe_generated");
+            notification.put("message", "새로운 레시피가 생성되었습니다: " + recipeName);
+            notification.put("username", "시스템");
 
-        messagingTemplate.convertAndSendToUser(
-                username,
-                "/queue/messages",
-                notification
-        );
+            messagingTemplate.convertAndSendToUser(
+                    username,
+                    "/queue/messages",
+                    notification
+            );
+
+            log.debug("레시피 생성 알림 전송 완료: {} -> {}", username, recipeName);
+        } catch (Exception e) {
+            log.warn("레시피 생성 알림 전송 실패: {}", e.getMessage());
+        }
     }
 
     /**
      * 대체 레시피 생성 알림을 WebSocket으로 전송
      */
     private void sendSubstituteRecipeNotification(String username, String original, String substitute, String recipeName) {
-        // 대체 가능 여부에 따라 다른 메시지 전송
-        boolean isSuccessful = recipeName != null && !recipeName.isBlank() &&
-                !recipeName.contains("적절하지 않") &&
-                !recipeName.contains("생성할 수 없");
+        try {
+            // 대체 가능 여부에 따라 다른 메시지 전송
+            boolean isSuccessful = recipeName != null && !recipeName.isBlank() &&
+                    !recipeName.contains("적절하지 않") &&
+                    !recipeName.contains("생성할 수 없");
 
-        String messageText = isSuccessful
-                ? original + "를 " + substitute + "로 대체한 레시피가 생성되었습니다: " + recipeName
-                : original + "를 " + substitute + "로 대체할 수 없습니다.";
+            String messageText = isSuccessful
+                    ? String.format("%s를 %s로 대체한 레시피가 생성되었습니다: %s", original, substitute, recipeName)
+                    : String.format("%s를 %s로 대체할 수 없습니다.", original, substitute);
 
-        Map<String, Object> notification = new HashMap<>();
-        notification.put("type", "recipe_substituted");
-        notification.put("message", messageText);
-        notification.put("username", "시스템");
-        notification.put("success", isSuccessful);
+            Map<String, Object> notification = new HashMap<>();
+            notification.put("type", "recipe_substituted");
+            notification.put("message", messageText);
+            notification.put("username", "시스템");
+            notification.put("success", isSuccessful);
+            notification.put("originalIngredient", original);
+            notification.put("substituteIngredient", substitute);
 
-        messagingTemplate.convertAndSendToUser(
-                username,
-                "/queue/messages",
-                notification
-        );
+            messagingTemplate.convertAndSendToUser(
+                    username,
+                    "/queue/messages",
+                    notification
+            );
+
+            log.debug("대체 레시피 알림 전송 완료: {} -> {} (성공: {})", original, substitute, isSuccessful);
+        } catch (Exception e) {
+            log.warn("대체 레시피 알림 전송 실패: {}", e.getMessage());
+        }
     }
 }
