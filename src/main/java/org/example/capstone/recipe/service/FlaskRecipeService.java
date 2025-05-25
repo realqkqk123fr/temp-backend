@@ -135,6 +135,24 @@ public class FlaskRecipeService {
             // 요청에 실을 데이터 로깅
             log.info("지시사항: {}", request.getInstructions());
 
+            // 사용자 ID로 사용자 조회 - 메서드의 맨 앞에서 한 번만 수행
+            User user = null;
+            if (request.getUserId() != null) {
+                // 사용자 ID로 사용자 조회
+                user = userRepository.findById(request.getUserId())
+                        .orElseThrow(() -> new CustomException(USER_NOT_FOUND));
+                log.info("레시피 소유자 설정: {}, ID: {}", user.getUsername(), user.getId());
+            } else if (request.getUsername() != null) {
+                // 사용자명으로 사용자 조회 (대체 방법)
+                user = userRepository.findByUsername(request.getUsername());
+                if (user == null) {
+                    throw new CustomException(USER_NOT_FOUND);
+                }
+                log.info("레시피 소유자 설정(사용자명): {}, ID: {}", user.getUsername(), user.getId());
+            } else {
+                throw new CustomException(USER_NOT_FOUND);
+            }
+
             // 이 부분에서 fullUrl을 사용하도록 수정
             HttpPost uploadFile = new HttpPost(fullUrl);
 
@@ -150,6 +168,17 @@ public class FlaskRecipeService {
 
             if (request.getSessionId() != null) {
                 builder.addTextBody("sessionId", request.getSessionId(), textContentType);
+            }
+
+            // 사용자 식습관 및 선호도 정보 추가
+            if (user.getHabit() != null && !user.getHabit().isEmpty()) {
+                builder.addTextBody("userHabit", user.getHabit(), textContentType);
+                log.debug("사용자 식습관 추가: {}", user.getHabit());
+            }
+
+            if (user.getPreference() != null && !user.getPreference().isEmpty()) {
+                builder.addTextBody("userPreference", user.getPreference(), textContentType);
+                log.debug("사용자 선호도 추가: {}", user.getPreference());
             }
 
             if (request.getImage() != null && !request.getImage().isEmpty()) {
@@ -194,22 +223,8 @@ public class FlaskRecipeService {
                 RecipeGenerateResponse flaskResponse = objectMapper.readValue(responseString, RecipeGenerateResponse.class);
 
                 // 현재 요청 사용자의 정보로 레시피 저장
-                User user = null;
-                if (request.getUserId() != null) {
-                    // 사용자 ID로 사용자 조회
-                    user = userRepository.findById(request.getUserId())
-                            .orElseThrow(() -> new CustomException(USER_NOT_FOUND));
-                    log.info("레시피 소유자 설정: {}, ID: {}", user.getUsername(), user.getId());
-                } else if (request.getUsername() != null) {
-                    // 사용자명으로 사용자 조회 (대체 방법)
-                    user = userRepository.findByUsername(request.getUsername());
-                    if (user == null) {
-                        throw new CustomException(USER_NOT_FOUND);
-                    }
-                    log.info("레시피 소유자 설정(사용자명): {}, ID: {}", user.getUsername(), user.getId());
-                } else {
-                    throw new CustomException(USER_NOT_FOUND);
-                }
+                // 이미 위에서 user 변수를 정의했으므로 다시 정의하지 않고 그대로 사용
+                // User user = null; 이 부분을 제거하고 기존 user 변수 사용
 
                 Recipe savedRecipe = saveRecipeFromResponse(flaskResponse, user);
                 flaskResponse.setId(savedRecipe.getId());

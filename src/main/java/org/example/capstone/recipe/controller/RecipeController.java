@@ -9,7 +9,9 @@ import org.example.capstone.nutrition.service.NutritionService;
 import org.example.capstone.recipe.domain.Recipe;
 import org.example.capstone.recipe.dto.*;
 import org.example.capstone.recipe.service.FlaskRecipeService;
+import org.example.capstone.user.domain.User;
 import org.example.capstone.user.login.dto.CustomUserDetails;
+import org.example.capstone.user.repository.UserRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -19,6 +21,8 @@ import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Mono;
 
 import java.util.*;
+
+import static org.example.capstone.global.exception.ErrorCode.USER_NOT_FOUND;
 
 /**
  * 통합된 레시피 컨트롤러
@@ -35,6 +39,7 @@ public class RecipeController {
     private final FlaskRecipeService recipeService;
     private final SimpMessagingTemplate messagingTemplate;
     private final NutritionService nutritionService;
+    private final UserRepository userRepository;
 
     /**
      * 실시간 어시스턴스 API
@@ -91,7 +96,17 @@ public class RecipeController {
             // 현재 사용자의 ID도 명시적으로 저장
             request.setUserId(userId);  // 이 필드가 RecipeGenerateRequest에 추가되어야 함
 
-            log.info("요청 객체 설정 완료 - 사용자: {}, ID: {}", request.getUsername(), request.getUserId());
+            // 사용자 정보 가져오기
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new CustomException(USER_NOT_FOUND));
+
+            // 사용자 식습관과 선호도 설정
+            request.setUserHabit(user.getHabit());
+            request.setUserPreference(user.getPreference());
+
+            log.info("요청 객체 설정 완료 - 사용자: {}, ID: {}, 식습관: {}, 선호도: {}",
+                    request.getUsername(), request.getUserId(),
+                    request.getUserHabit(), request.getUserPreference());
 
             // Flask 서버에 요청 전송
             RecipeGenerateResponse flaskResponse = recipeService.generateRecipeFromImage(request);
